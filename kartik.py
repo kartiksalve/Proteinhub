@@ -47,35 +47,58 @@ def get_string_interactions(uniprot_id, species=9606, min_score=0.4):
         "required_score": int(min_score * 1000)
     }
     url = f"{STRING_API_URL}/{STRING_OUTPUT_FORMAT}/{STRING_METHOD}"
-    response = requests.post(url, data=params)
-    if response.status_code == 200:
+    try:
+        response = requests.post(url, data=params)
+        response.raise_for_status()  # Raise an exception for HTTP errors
         return response.json()
-    return None
+    except requests.exceptions.RequestException as e:
+        st.error(f"Error fetching data from STRING DB: {e}")
+        return None
+    except ValueError: # Catches JSON decoding errors
+        st.error("Error decoding JSON response from STRING DB. The API might have returned an unexpected format.")
+        if response:
+            st.error(f"Response content: {response.text[:500]}...") # Show part of the response
+        return None
+
 
 def build_network(data):
-    G = nx.DiGraph()
+    G = nx.DiGraph() # Using DiGraph as in original, though STRING interactions are often undirected.
+                    # If undirected is preferred, use nx.Graph()
+    if not data or not isinstance(data, list): # Add check for empty or malformed data
+        return G
+        
     for interaction in data:
-        p1 = interaction['preferredName_A']
-        p2 = interaction['preferredName_B']
-        score = interaction['score']
-        G.add_edge(p1, p2, weight=score)
+        # Ensure keys exist to prevent KeyErrors
+        p1 = interaction.get('preferredName_A')
+        p2 = interaction.get('preferredName_B')
+        score = interaction.get('score')
+        
+        if p1 and p2 and score is not None: # Ensure all required fields are present
+            G.add_edge(p1, p2, weight=float(score)) # Ensure score is float
     return G
 
 def find_hub_genes(G, top_n=5):
+    if G.number_of_nodes() == 0:
+        return []
     degree_dict = dict(G.degree())
     sorted_genes = sorted(degree_dict.items(), key=lambda x: x[1], reverse=True)
     return [gene for gene, _ in sorted_genes[:top_n]]
 
 def create_graph_figure(G, hub_genes):
-    pos = nx.spring_layout(G, seed=42)
+    if G.number_of_nodes() == 0: # Handle empty graph case for layout
+        pos = {}
+    else:
+        pos = nx.spring_layout(G, seed=42)
+    
     degrees = dict(G.degree())
 
     edge_x, edge_y = [], []
     for src, dst in G.edges():
-        x0, y0 = pos[src]
-        x1, y1 = pos[dst]
-        edge_x.extend([x0, x1, None])
-        edge_y.extend([y0, y1, None])
+        if src in pos and dst in pos: # Ensure nodes are in pos dict
+            x0, y0 = pos[src]
+            x1, y1 = pos[dst]
+            edge_x.extend([x0, x1, None])
+            edge_y.extend([y0, y1, None])
 
     edge_trace = go.Scatter(
         x=edge_x, y=edge_y,
@@ -84,30 +107,33 @@ def create_graph_figure(G, hub_genes):
         mode='lines'
     )
 
-    node_x, node_y, node_size, node_color, node_text = [], [], [], [], []
+    node_x, node_y, node_size, node_color, node_text_labels, node_hover_text = [], [], [], [], [], []
     for node in G.nodes():
-        x, y = pos[node]
-        degree = degrees[node]
-        node_x.append(x)
-        node_y.append(y)
-        node_size.append(15 + degree * 2)
-        node_color.append('red' if node in hub_genes else 'royalblue')
-        node_text.append(f"{node}<br>Degree: {degree}")
+        if node in pos: # Ensure node is in pos dict
+            x, y = pos[node]
+            degree = degrees.get(node, 0) # Use .get for safety
+            node_x.append(x)
+            node_y.append(y)
+            node_size.append(15 + degree * 2)
+            node_color.append('red' if node in hub_genes else 'royalblue')
+            node_text_labels.append(node) # Text displayed on the node
+            node_hover_text.append(f"{node}<br>Degree: {degree}") # Text for hover
 
     node_trace = go.Scatter(
         x=node_x, y=node_y,
         mode='markers+text',
-        text=[node for node in G.nodes()],
+        text=node_text_labels, # Text elements to display on the graph
         textposition="middle center",
-        textfont=dict(color='white', size=10), # Text on nodes
+        textfont=dict(color='white', size=10), # Text on nodes (inside markers if small enough)
         marker=dict(size=node_size, color=node_color, line=dict(width=1, color='white')),
-        hoverinfo='text',
-        hovertext=node_text
+        hoverinfo='text', # Use 'text' and supply hover_text
+        hovertext=node_hover_text # Custom hover text
     )
 
+    # The main fix is here: titlefont -> title_font
     layout = go.Layout(
         title="Protein Interaction Network",
-        titlefont=dict(color='#333'), # Title color
+        title_font=dict(color='#333'), # Changed from titlefont
         showlegend=False,
         hovermode='closest',
         margin=dict(b=20, l=20, r=20, t=40),
@@ -120,13 +146,16 @@ def create_graph_figure(G, hub_genes):
     return go.Figure(data=[edge_trace, node_trace], layout=layout)
 
 # -------------- Streamlit UI --------------
+st.set_page_config(page_title="Prot'n'Hub", layout="wide") # Optional: use wide layout
+
 st.title("🧬 Prot'n'Hub – Protein Interaction & Hub Gene Explorer")
 
 tabs = st.tabs(["Home", "About"])
 with tabs[0]:
     st.header("Explore Protein Network")
 
-    user_input = st.text_area("Enter Protein Name or UniProt ID", height=120)
+    user_input = st.text_area("Enter Protein Name or UniProt ID(s)", height=100, 
+                              help="Enter one or more UniProt IDs or protein names, separated by newlines or commas.")
 
     st.subheader("Species Selection")
     species_dict = {
@@ -135,71 +164,99 @@ with tabs[0]:
         "Rat (Rattus norvegicus)": 10116,
         "Zebrafish (Danio rerio)": 7955,
         "Fruit fly (Drosophila melanogaster)": 7227,
+        "Yeast (Saccharomyces cerevisiae)": 4932, # Added yeast
+        "E. coli (Escherichia coli K12)": 83333, # Added E. coli
         "Custom (enter manually)": None,
     }
-    selected_species = st.selectbox("Choose species", list(species_dict.keys()), index=0)
-    if selected_species == "Custom (enter manually)":
-        species = st.number_input("Enter NCBI Taxonomy ID", value=9606)
+    selected_species_name = st.selectbox("Choose species", list(species_dict.keys()), index=0)
+    if selected_species_name == "Custom (enter manually)":
+        species = st.number_input("Enter NCBI Taxonomy ID", value=9606, min_value=0)
     else:
-        species = species_dict[selected_species]
+        species = species_dict[selected_species_name]
 
-    score_threshold = st.slider("Interaction Score Threshold", 0.0, 1.0, 0.4, 0.05)
+    score_threshold = st.slider("Interaction Score Threshold", 0.0, 1.0, 0.4, 0.05,
+                                help="Minimum confidence score for interactions (0.0-1.0). Higher values mean more stringent, fewer interactions.")
 
-    if st.button("🔍 Analyze"):
+    if st.button("🔍 Analyze", type="primary"):
         with st.spinner("Fetching and analyzing data..."):
-            uniprot_id = user_input.strip()
-            if not uniprot_id:
-                st.warning("Please enter a Protein Name or UniProt ID.")
+            # Process multiple inputs (comma or newline separated)
+            raw_input = user_input.strip()
+            if not raw_input:
+                st.warning("Please enter at least one Protein Name or UniProt ID.")
+                st.stop()
+            
+            # Split by comma or newline, strip whitespace, filter empty strings
+            identifiers_list = [ident.strip() for ident_group in raw_input.split(',') 
+                                for ident in ident_group.splitlines() if ident.strip()]
+            
+            if not identifiers_list:
+                st.warning("No valid identifiers found after processing input.")
                 st.stop()
 
-            string_data = get_string_interactions(uniprot_id, species, score_threshold)
-            if not string_data:
-                st.error("❌ No interaction data found or error fetching data. Check your input and try again.")
+            # Join identifiers with '%0d' for STRING API (newline character)
+            uniprot_ids_for_api = "%0d".join(identifiers_list)
+
+            string_data = get_string_interactions(uniprot_ids_for_api, species, score_threshold)
+            
+            if string_data is None: # get_string_interactions now returns None on error and logs it
+                # Error message already shown by get_string_interactions
                 st.stop()
+            if not string_data: # Empty list from API (valid response, but no interactions)
+                 st.info(f"ℹ️ No interaction data found for '{', '.join(identifiers_list)}' with the current settings. "
+                         "This could be due to the protein(s) not having known interactions in STRING, "
+                         "the species, or the score threshold. Try a lower score or check your input.")
+                 st.stop()
+
 
             G = build_network(string_data)
             if G.number_of_nodes() == 0:
-                st.warning("ℹ️ No network could be built with the given parameters. Try a lower score threshold or a different protein.")
+                st.warning("ℹ️ No network could be built with the given parameters. "
+                           "This might happen if the provided identifiers were not found or had no interactions "
+                           "above the selected score threshold. Try a lower score threshold or check your identifiers.")
                 st.stop()
 
             hub_genes = find_hub_genes(G)
             if hub_genes:
                 st.success(f"Top Hub Genes: {', '.join(hub_genes)}")
             else:
-                st.info("No distinct hub genes found based on the current network.")
+                st.info("No distinct hub genes found based on the current network (e.g., all nodes have similar degrees or network is too small).")
 
 
             fig = create_graph_figure(G, hub_genes)
             st.plotly_chart(fig, use_container_width=True)
 
             # Save to PNG and offer download
-            buf = io.BytesIO()
-            fig.write_image(buf, format="png", width=1000, height=800, engine="kaleido")
-            st.download_button(
-                label="📥 Download Network as PNG",
-                data=buf.getvalue(),
-                file_name=f"{uniprot_id}_network.png",
-                mime="image/png"
-            )
+            try:
+                buf = io.BytesIO()
+                fig.write_image(buf, format="png", width=1000, height=800, engine="kaleido") # Ensure kaleido is installed
+                st.download_button(
+                    label="📥 Download Network as PNG",
+                    data=buf.getvalue(),
+                    file_name=f"{identifiers_list[0]}_network.png", # Use first identifier for filename
+                    mime="image/png"
+                )
+            except Exception as e:
+                st.error(f"Could not generate PNG for download. Make sure 'kaleido' is installed (`pip install kaleido`). Error: {e}")
+
 
             with st.expander("📊 Network Analysis Results", expanded=True):
-                st.write(f"⭐ **Nodes**: {G.number_of_nodes()}")
-                st.write(f"List of Nodes: {', '.join(list(G.nodes()))}")
-                st.write(f"⭐ **Edges**: {G.number_of_edges()}")
-                # st.write(f"List of Edges: {list(G.edges())}") # Can be very long
+                st.write(f"⭐ **Nodes (Proteins)**: {G.number_of_nodes()}")
+                # st.write(f"List of Nodes: {', '.join(list(G.nodes()))}") # Can be too long
+                st.write(f"⭐ **Edges (Interactions)**: {G.number_of_edges()}")
+                
                 degree_dict = dict(G.degree())
-                st.write("⭐ **Node Degrees:**")
-                for node, degree in sorted(degree_dict.items(), key=lambda item: item[1], reverse=True)[:10]: # Show top 10
-                    st.write(f"- {node}: {degree}")
-                if len(degree_dict) > 10:
-                    st.write("... and more.")
-
                 if degree_dict:
-                    main_hub = max(degree_dict, key=degree_dict.get)
-                    st.info(f"🏆 **Main Hub Gene (Highest Degree):** {main_hub} (Degree: {degree_dict[main_hub]})")
-                else:
-                    st.info("No nodes to determine a main hub gene.")
+                    st.write("⭐ **Node Degrees (Top 10 or all if fewer):**")
+                    sorted_degrees = sorted(degree_dict.items(), key=lambda item: item[1], reverse=True)
+                    for node, degree in sorted_degrees[:10]:
+                        st.write(f"- {node}: {degree}")
+                    if len(sorted_degrees) > 10:
+                        st.write(f"... and {len(sorted_degrees)-10} more.")
 
+                    main_hub_node, main_hub_degree = sorted_degrees[0]
+                    st.info(f"🏆 **Main Hub Gene (Highest Degree):** {main_hub_node} (Degree: {main_hub_degree})")
+                else:
+                    st.info("No nodes to determine degrees or main hub gene.")
 
 with tabs[1]:
     st.header("About Prot'n'Hub")
@@ -207,7 +264,7 @@ with tabs[1]:
     Prot'n'Hub is a Streamlit-based interactive application for exploring protein-protein interaction networks.
 
     **Features:**
-    - Input UniProt ID or protein name
+    - Input UniProt ID(s) or protein name(s)
     - Visualize interaction graphs
     - Detect top hub genes
     - Interactive, styled Plotly graphs
@@ -226,19 +283,19 @@ with tabs[1]:
       Prot'n'Hub is designed to be simple and informative. Here's a quick guide:
 
     **🔹 Explore Protein Network:**  
-    Enter a *protein name* (like "TP53") or a *UniProt ID* (like "P04637"). The app uses this to search for protein-protein interactions from the STRING database.
+    Enter one or more *protein names* (like "TP53", "EGFR") or *UniProt IDs* (like "P04637", "P00533"), separated by commas or newlines. The app uses these to search for protein-protein interactions from the STRING database.
 
     **🔹 Species Selection:**  
-    Choose the species your protein belongs to. For example:
+    Choose the species your protein(s) belong to. For example:
     - Human = Homo sapiens
     - Mouse = Mus musculus  
     If your species isn't listed, choose **Custom** and enter its **NCBI Taxonomy ID** (a unique number for each species).
 
     **🔹 Interaction Score Threshold:**  
-    This sets the minimum confidence score for the interactions.  
-    - Lower values (e.g. 0.2) = more connections, but lower reliability  
+    This sets the minimum confidence score for the interactions (0.0 to 1.0).  
+    - Lower values (e.g. 0.2) = more connections, but potentially lower reliability  
     - Higher values (e.g. 0.7+) = fewer connections, but higher reliability  
-    Default is **0.4**, which balances both.
+    Default is **0.4**, which often provides a good balance.
 
     **🔹 Nodes:**  
     Each circle in the graph is a *protein*. The number of nodes shows how many proteins are in your interaction network.
