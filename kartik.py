@@ -2,7 +2,7 @@ import streamlit as st
 import requests
 import networkx as nx
 import plotly.graph_objects as go
-import io
+import io # Still potentially useful for other things, but not strictly for download anymore
 
 # -------------- Streamlit Page Configuration (MUST BE FIRST STREAMLIT COMMAND) --------------
 st.set_page_config(page_title="Prot'n'Hub", layout="wide")
@@ -16,29 +16,18 @@ def style_app_container():
         padding: 2rem 3rem;
         border-radius: 1rem;
         color: #333;
-        max-width: 1000px; /* This might be overridden by layout="wide" for the main container */
-        margin: auto; /* Centering for the block-container itself */
+        max-width: 1000px; 
+        margin: auto; 
     }}
-    /* Styling for content within the styled block-container if you still want it centered */
-    /* .stApp > div > .block-container {{
-        max-width: 1000px;
-        margin: auto;
-    }} */
-
-    /* Optional: Style for the main app body if you want a specific color */
     .stApp {{
-        /* background-color: #f0f2f6; */ /* Example: Light grey background for the whole app */
+        /* background-color: #f0f2f6; */ 
     }}
     h1, h2, h3, h4, h5, h6 {{
-        color: #333; /* Ensure headers are readable on potentially light backgrounds */
+        color: #333; 
     }}
     </style>
     """
     st.markdown(css, unsafe_allow_html=True)
-
-# Apply container styling if you want a specific content block to have this style
-# If you want the whole app to have a specific background, use .stApp CSS
-# style_app_container() # Commenting out if layout="wide" is primary styling goal
 
 # -------------- Constants --------------
 STRING_API_URL = "https://string-db.org/api"
@@ -50,7 +39,7 @@ def get_string_interactions(uniprot_id, species=9606, min_score=0.4):
     params = {
         "identifiers": uniprot_id,
         "species": species,
-        "caller_identity": "streamlit_app_proteinhub", # Made caller_identity more specific
+        "caller_identity": "streamlit_app_proteinhub",
         "required_score": int(min_score * 1000)
     }
     url = f"{STRING_API_URL}/{STRING_OUTPUT_FORMAT}/{STRING_METHOD}"
@@ -63,7 +52,7 @@ def get_string_interactions(uniprot_id, species=9606, min_score=0.4):
         return None
     except ValueError:
         st.error("Error decoding JSON response from STRING DB. The API might have returned an unexpected format.")
-        if response:
+        if 'response' in locals() and response: # Check if response object exists
             st.error(f"Response content: {response.text[:500]}...")
         return None
 
@@ -90,7 +79,7 @@ def create_graph_figure(G, hub_genes):
     if G.number_of_nodes() == 0:
         pos = {}
     else:
-        pos = nx.spring_layout(G, seed=42, k=0.5, iterations=50) # Adjusted layout params for potentially better spread
+        pos = nx.spring_layout(G, seed=42, k=0.5, iterations=50)
     
     degrees = dict(G.degree())
 
@@ -104,7 +93,7 @@ def create_graph_figure(G, hub_genes):
 
     edge_trace = go.Scatter(
         x=edge_x, y=edge_y,
-        line=dict(width=1.0, color='rgba(150,150,150,0.8)'), # Softer edge color
+        line=dict(width=1.0, color='rgba(150,150,150,0.8)'),
         hoverinfo='none',
         mode='lines'
     )
@@ -116,67 +105,53 @@ def create_graph_figure(G, hub_genes):
             degree = degrees.get(node, 0)
             node_x.append(x)
             node_y.append(y)
-            node_size.append(min(50, 10 + degree * 1.5)) # Capped max size, adjusted scaling
-            node_color.append('crimson' if node in hub_genes else 'cornflowerblue') # Changed colors slightly
-            node_text_labels.append(node if degree > 2 or node in hub_genes else "") # Show text only for more connected or hub nodes
+            node_size.append(min(50, 10 + degree * 1.5))
+            node_color.append('crimson' if node in hub_genes else 'cornflowerblue')
+            node_text_labels.append(node if degree > 2 or node in hub_genes else "")
             node_hover_text.append(f"<b>{node}</b><br>Degree: {degree}")
 
     node_trace = go.Scatter(
         x=node_x, y=node_y,
         mode='markers+text',
         text=node_text_labels,
-        textposition="top center", # Position text above marker
-        textfont=dict(color='black', size=9), # Node text color and size
+        textposition="top center",
+        textfont=dict(color='black', size=9),
         marker=dict(
             size=node_size,
             color=node_color,
-            line=dict(width=1, color='rgba(50,50,50,0.8)'), # Darker marker border
+            line=dict(width=1, color='rgba(50,50,50,0.8)'),
             opacity=0.9
         ),
         hoverinfo='text',
         hovertext=node_hover_text,
-        hovertemplate='%{hovertext}<extra></extra>' # Custom hover template
+        hovertemplate='%{hovertext}<extra></extra>'
     )
 
-    # CORRECTED: titlefont -> title_font
     layout = go.Layout(
         title=dict(
             text="<b>Protein Interaction Network</b>",
-            font=dict(color='#222222', size=18), # Using title object for more control
-            x=0.5, # Center title
+            font=dict(color='#222222', size=18),
+            x=0.5,
             xanchor='center'
         ),
-        # title_font=dict(color='#333'), # This was the fix needed, also valid
         showlegend=False,
         hovermode='closest',
-        margin=dict(b=10, l=10, r=10, t=50), # Adjusted margins
-        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, visible=False), # Made axes invisible
-        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, visible=False), # Made axes invisible
-        plot_bgcolor='rgba(245,245,245,1)', # Lighter plot background
+        margin=dict(b=10, l=10, r=10, t=50),
+        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, visible=False),
+        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, visible=False),
+        plot_bgcolor='rgba(245,245,245,1)',
         paper_bgcolor='rgba(255,255,255,1)',
-        height=600 # Explicit height for the plot
+        height=600
     )
 
     return go.Figure(data=[edge_trace, node_trace], layout=layout)
 
 # -------------- Streamlit UI --------------
-# st.set_page_config is now at the top
-
-# If you want the specific styling for the main content area, call it here:
-# style_app_container()
-# However, with layout="wide", the .block-container style might not behave as expected
-# for the *main* app container. It's better for styling specific expanders or columns.
-
 st.title("🧬 Prot'n'Hub – Protein Interaction & Hub Gene Explorer")
 
 tabs = st.tabs(["Home", "About"])
 
 with tabs[0]:
-    # To apply the custom styling to this tab's content, you can wrap it in a div
-    # or simply accept the default Streamlit styling which is often cleaner with layout="wide"
-    # For example, if you want the darker background for the form elements:
-    # st.markdown('<div class="block-container">', unsafe_allow_html=True) # Start custom styled block
-
     st.header("Explore Protein Network")
 
     user_input = st.text_area("Enter Protein Name or UniProt ID(s)", height=100,
@@ -197,14 +172,13 @@ with tabs[0]:
     with col1:
         selected_species_name = st.selectbox("Choose species", list(species_dict.keys()), index=0)
     with col2:
-        score_threshold = st.slider("Interaction Score Threshold", 0.0, 1.0, 0.4, 0.01, # Smaller step
+        score_threshold = st.slider("Interaction Score Threshold", 0.0, 1.0, 0.4, 0.01,
                                     help="Minimum confidence score for interactions (0.0-1.0). Higher values mean more stringent, fewer interactions.")
 
     if selected_species_name == "Custom (enter manually)":
         species = st.number_input("Enter NCBI Taxonomy ID", value=9606, min_value=0, step=1)
     else:
         species = species_dict[selected_species_name]
-
 
     if st.button("🔍 Analyze", type="primary", use_container_width=True):
         with st.spinner("⏳ Fetching and analyzing data... Please wait."):
@@ -243,19 +217,20 @@ with tabs[0]:
             fig = create_graph_figure(G, hub_genes)
             st.plotly_chart(fig, use_container_width=True)
 
-            try:
-                buf = io.BytesIO()
-                # Using kaleido which should be installed by plotly if `pip install plotly[kaleido]` or `pip install kaleido`
-                fig.write_image(buf, format="png", width=1200, height=900, scale=2, engine="kaleido")
-                st.download_button(
-                    label="📥 Download Network as PNG",
-                    data=buf.getvalue(),
-                    file_name=f"{identifiers_list[0]}_network.png",
-                    mime="image/png",
-                    use_container_width=True
-                )
-            except Exception as e:
-                st.error(f"Could not generate PNG for download. Make sure 'kaleido' is installed (`pip install kaleido`). Error: {e}")
+            # --- REMOVED PNG DOWNLOAD SECTION ---
+            # try:
+            #     buf = io.BytesIO()
+            #     fig.write_image(buf, format="png", width=1200, height=900, scale=2, engine="kaleido")
+            #     st.download_button(
+            #         label="📥 Download Network as PNG",
+            #         data=buf.getvalue(),
+            #         file_name=f"{identifiers_list[0]}_network.png",
+            #         mime="image/png",
+            #         use_container_width=True
+            #     )
+            # except Exception as e:
+            #     st.error(f"Could not generate PNG for download. Make sure 'kaleido' is installed (`pip install kaleido`). Error: {e}")
+            # --- END OF REMOVED SECTION ---
             
             st.subheader("📊 Network Analysis Results")
             if hub_genes:
@@ -278,18 +253,14 @@ with tabs[0]:
                     if len(sorted_degrees) > 20:
                         st.write(f"... and {len(sorted_degrees)-20} more.")
 
-                if sorted_degrees: # Check if sorted_degrees is not empty
+                if sorted_degrees: 
                     main_hub_node, main_hub_degree = sorted_degrees[0]
                     st.info(f"🏆 **Primary Hub Gene (Highest Degree):** {main_hub_node} (Degree: {main_hub_degree})")
             else:
                 st.info("No nodes to determine degrees or main hub gene.")
 
-    # st.markdown('</div>', unsafe_allow_html=True) # End custom styled block (if used)
-
-
 with tabs[1]:
     st.header("About Prot'n'Hub")
-    # ... (rest of your "About" markdown, unchanged)
     st.markdown("""
     Prot'n'Hub is a Streamlit-based interactive application for exploring protein-protein interaction networks.
 
@@ -299,8 +270,7 @@ with tabs[1]:
     - Detect top hub genes
     - Interactive, styled Plotly graphs
     - Customizable species and score thresholds
-    - Downloadable graph as PNG image
-
+    
     **Powered By:**
     - STRING API
     - UniProt API (Implicitly via STRING for name resolution)
@@ -340,9 +310,6 @@ with tabs[1]:
     **🔹 Main Hub Gene:**  
     The protein with the most connections in your network. These are often biologically important and can be potential targets for further research.
 
-    **🔹 Download Graph as PNG:**  
-    Click this button to save the visual interaction network as a PNG image for reports or presentations.
-
     ---
 
     ### 📄 Acknowledgement
@@ -372,7 +339,6 @@ with tabs[1]:
     - Visualize interaction graphs
     - Find key hub genes
     - Customize species and score thresholds
-    - Download the graph for reports or presentations
 
     It's been exciting to bring these tools together in a user-friendly application,
     and I hope Prot'n'Hub proves useful for others exploring the fascinating world of protein interactions.
